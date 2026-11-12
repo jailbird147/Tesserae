@@ -97,7 +97,7 @@ def draw_background(surface, title: str | None = None, subtitle: str | None = No
 
 # Where the complete source is published. GPL v3+ requires this to be real
 # before the Store listing goes live - see tools/build_msix.py for identity.
-SOURCE_URL = "https://github.com/your-account/tessera"  # TODO: set before submission
+SOURCE_URL = "https://github.com/jailbird147/Tesserae"
 
 
 class MenuScreen(Screen):
