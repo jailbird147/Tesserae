@@ -1,0 +1,536 @@
+/*
+ *  Quackle -- Crossword game artificial intelligence and analysis tool
+ *  Copyright (C) 2005-2019 Jason Katz-Brown, John O'Laughlin, and John Fultz.
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 3 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#ifndef QUACKLE_SIM_H
+#define QUACKLE_SIM_H
+
+#include <atomic>
+#include <condition_variable>
+#include <exception>
+#include <mutex>
+#include <queue>
+#include <sstream>
+#include <thread>
+#include <vector>
+
+#include "alphabetparameters.h"
+#include "game.h"
+
+using std::vector;
+
+namespace Quackle
+{
+
+class ComputerDispatch;
+
+// A hint; platforms are free to ignore it.
+enum class ThreadQoS { EnergyEfficient, Balanced, Performance };
+
+struct AveragedValue
+{
+	// new zeroed value
+	AveragedValue()
+		: m_valueSum(0), m_squaredValueSum(0), m_incorporatedValues(0)
+	{
+	}
+
+	void incorporateValue(double newValue);
+
+	void incorporate(const AveragedValue &other);
+
+	// zero everything
+	void clear();
+
+	long double valueSum() const;
+	long double squaredValueSum() const;
+	long int incorporatedValues() const;
+
+	// whether or not incorporatedValues is greater than zero
+	bool hasValues() const;
+
+	// valueSum() / incorporatedValues() or zero
+	// if there have been no incorporated values
+	double averagedValue() const;
+
+	// sqrt((incorporatedValues() * squaredValueSum() - valueSum()^2) / (incorporatedValues() * (incorporatedValues() - 1)))
+	double standardDeviation() const;
+
+private:
+	long double m_valueSum;
+	long double m_squaredValueSum;
+	long int m_incorporatedValues;
+};
+
+inline void AveragedValue::incorporateValue(double newValue)
+{
+	m_valueSum += newValue;
+	m_squaredValueSum += newValue * newValue;
+	++m_incorporatedValues;
+}
+
+inline void AveragedValue::incorporate(const AveragedValue &other)
+{
+	m_valueSum += other.m_valueSum;
+	m_squaredValueSum += other.m_squaredValueSum;
+	m_incorporatedValues += other.m_incorporatedValues;
+}
+
+inline long double AveragedValue::valueSum() const
+{
+	return m_valueSum;
+}
+
+inline long double AveragedValue::squaredValueSum() const
+{
+	return m_squaredValueSum;
+}
+
+inline double AveragedValue::averagedValue() const
+{
+	return m_incorporatedValues == 0 ? 0 : (m_valueSum / m_incorporatedValues);
+}
+
+inline long int AveragedValue::incorporatedValues() const
+{
+	return m_incorporatedValues;
+}
+
+inline bool AveragedValue::hasValues() const
+{
+	return m_incorporatedValues > 0;
+}
+
+struct PositionStatistics
+{
+	enum StatisticType { StatisticScore, StatisticBingos };
+	AveragedValue getStatistic(StatisticType type) const;
+
+	void incorporate(const PositionStatistics &other);
+
+	AveragedValue score;
+	AveragedValue bingos;
+};
+
+typedef vector<PositionStatistics> PositionStatisticsList;
+
+struct Level
+{
+	// expand the scores list to be at least number long
+	void setNumberScores(unsigned int number);
+
+	// grows to fit; a narrower other never truncates us
+	void incorporate(const Level &other);
+
+	PositionStatisticsList statistics;
+};
+
+class LevelList : public vector<Level>
+{
+public:
+	// expand the levels list to be at least number long
+	void setNumberLevels(unsigned int number);
+
+	// grows to fit; a shallower other never truncates us
+	void incorporate(const LevelList &other);
+};
+
+struct SimmedMove
+{
+	SimmedMove(const Move &_move)
+		: move(_move), m_id(++objectIdCounter), m_includeInSimulation(true)
+	{
+	}
+
+	// + our scores - their scores + residual, except if we have no levels,
+	// in which case returns move.equity
+	double calculateEquity() const;
+
+	// average wins value * 100, except if we have no win percentage data,
+	// in which case returns move.win
+	double calculateWinPercentage() const;
+
+	// clear all level values
+	void clear();
+
+	bool includeInSimulation() const;
+	void setIncludeInSimulation(bool includeInSimulation);
+
+	long id() const { return m_id; };
+
+	Move move;
+	LevelList levels;
+	AveragedValue residual;
+	AveragedValue gameSpread;
+	AveragedValue wins;
+
+	PositionStatistics getPositionStatistics(int level, int playerIndex) const;
+
+private:
+	long m_id;
+	bool m_includeInSimulation;
+
+	static std::atomic_long objectIdCounter;
+};
+
+inline bool SimmedMove::includeInSimulation() const
+{
+	return m_includeInSimulation;
+}
+
+inline void SimmedMove::setIncludeInSimulation(bool includeInSimulation)
+{
+	m_includeInSimulation = includeInSimulation;
+}
+
+typedef vector<SimmedMove> SimmedMoveList;
+
+class SimmedMoveMessage
+{
+public:
+	long id;
+	// index into the simulator's move list; id cross-checks it
+	int moveIndex = -1;
+	// one-indexed, matching the simulator's iteration count
+	int iteration = 0;
+	Move move;
+	LevelList levels;
+	double residual;
+	double gameSpread;
+	double wins;
+
+	bool bogowin;
+	// set if the worker's simulateOnePosition() threw; the message's
+	// results are invalid and simulate() rethrows this on the main thread
+	std::exception_ptr error;
+	std::ostringstream logStream;
+	UVString xmlIndent;
+};
+
+class SimmedMoveConstants
+{
+public:
+	Game game;
+	Rack partialOppoRack;
+	int startPlayerId;
+	int playerCount;
+	int decimalTurns;
+	int levelCount;
+	bool ignoreOppos;
+	bool isLogging;
+};
+
+class SimmedMoveMessageQueue
+{
+public:
+	SimmedMoveMessageQueue() = default;
+	SimmedMoveMessageQueue(SimmedMoveMessageQueue &) = delete;
+	SimmedMoveMessageQueue(SimmedMoveMessageQueue &&) = delete;
+
+	void push(SimmedMoveMessage &msg);
+	SimmedMoveMessage pop();
+	std::pair<SimmedMoveMessage, bool> pop_or_terminate();
+	void send_terminate_all();
+	// call only after all threads have been joined
+	void reset_terminate_all();
+	void send_terminate_one(const std::thread::id &id);
+
+	const SimmedMoveConstants &constants() { return m_constants; };
+	void setConstants(const SimmedMoveConstants &constants) { m_constants = constants; };
+
+private:
+	SimmedMoveConstants m_constants;
+	std::queue<SimmedMoveMessage> m_queue;
+	std::condition_variable m_condition;
+	std::mutex m_queueMutex;
+	bool m_terminateAll = false;
+	std::thread::id m_terminateOne;
+};
+
+class Simulator
+{
+public:
+	// constructs a new simulator
+	Simulator();
+	Simulator(const Simulator &) = delete;
+	Simulator(Simulator &&) = delete;
+	~Simulator();
+
+	// Simulate moves on this position. Also initializes the
+	// move list, rack, resets numbers, and closes logfile.
+	void setPosition(const GamePosition &position);
+
+	// get access to the position that starts each playahead of the
+	// simulation; use to rechange rack or scores etcetera
+	GamePosition &currentPosition();
+	const GamePosition &currentPosition() const;
+
+	const History &history() const;
+
+	// If logfile is an empty string, logging is disabled.
+	// If logfile is the same logfile as currently set, nothing
+	// happens. If it is different, old logfile is closed if it
+	// was open. If append is false, this destroys file contents
+	// already in logfile.
+	void setLogfile(const string &logfile, bool append = true);
+	string logfile() const;
+
+	// Will honor dispatch->shouldAbort() but won't signal
+	// any doneness for now.
+	void setDispatch(ComputerDispatch *dispatch);
+	ComputerDispatch *dispatch() const;
+
+	// append message to logfile if one is open
+	void logMessage(const UVString &message);
+
+	bool isLogging() const;
+	void closeLogfile();
+
+	// Set moves to include in simulation. Moves that
+	// are in the simmed list now that are not in this given
+	// list still live in the simmed list but are not iterated thru
+	// during simulation. Moves that were not in the simmed list are added
+	// to front of simmed move list and level values zeroed.
+	void setIncludedMoves(const MoveList &moves);
+
+	void makeSureConsideredMovesAreIncluded();
+	void moveConsideredMovesToBeginning(MoveList &moves) const;
+
+	// moves that are immune from pruning
+	void setConsideredMoves(const MoveList &moves);
+	const MoveList &consideredMoves() const;
+	void addConsideredMove(const Move &move);
+	bool isConsideredMove(const Move &move) const;
+
+	// include only currently included moves that are within
+	// equityThreshold points below the best play and cap at
+	// maxNumberOfMoves
+	void pruneTo(double equityThreshold, int maxNumberOfMoves);
+
+	// if ignore is true, oppos will always pass in simulation
+	void setIgnoreOppos(bool ignore);
+	bool ignoreOppos() const;
+
+	static void simThreadFunc(SimmedMoveMessageQueue &incoming, SimmedMoveMessageQueue &outgoing, ThreadQoS qos);
+
+	// A change of QoS recycles the whole pool, not just the threads added.
+	// Threads are not started until the first simulate().
+	void setThreadCount(size_t count, ThreadQoS qos = ThreadQoS::Balanced);
+	size_t threadCount() const;
+	ThreadQoS threadQoS() const;
+
+	// The count this machine advises at a given QoS, which is what a
+	// Simulator starts out asking for at its default QoS.
+	static size_t recommendedThreadCount(ThreadQoS qos);
+	void setRecommendedThreadCount();
+
+	// set values for all levels of all moves to zero
+	void resetNumbers();
+
+	// Run a chunk of the simulation.
+	// If plies is negative, simulation runs to end of game.
+	// Iterations is how many iterations to run before returning;
+	// more iterations can be computed and incorporated by recalling
+	// simulate().
+	void simulate(int plies, int iterations);
+
+	// simulate one iteration
+	void simulate(int plies);
+	static void simulateOnePosition(SimmedMoveMessage &message, const SimmedMoveConstants &constants);
+
+	// How many iterations simulate() pushes before collecting any of them.
+	// At least one, never more than remaining.
+	static int iterationsPerChunk(size_t threadCount, int includedMoves, int remaining);
+
+	// Incorporate the results of a single simulation into the
+	// cumulative results
+	void incorporateMessage(const SimmedMoveMessage &message);
+
+	// Set oppo's rack to some partially-known tiles.
+	// Set this to an empty rack if no tiles are known, so
+	// that all tiles are chosen randomly each iteration.
+	void setPartialOppoRack(const Rack &rack);
+	const Rack &partialOppoRack() const;
+
+	// Set oppo's racks to something random, including
+	// tiles specified by setPartialOppoRack above.
+	// Possibly inference-aided randomness.
+	// During simulation, each playahead randomizes its own copy of the
+	// position (via the static overloads) so draws are independent
+	// across candidate moves.
+	void randomizeOppoRacks();
+	static void randomizeOppoRacks(GamePosition &position, const Rack &partialOppoRack);
+
+	// set drawing order for the first refill
+	void randomizeDrawingOrder();
+	static void randomizeDrawingOrder(GamePosition &position);
+
+	// returns maximal number of iterations over all moves since
+	// resetting numbers
+	int iterations() const;
+
+	// returns true if any iterations have been run
+	bool hasSimulationResults() const;
+
+	// full simulation information
+	const SimmedMoveList &simmedMoves() const;
+
+	// Return the moves sorted by simulated equity.
+	// If prune is true, does not include plays that aren't included
+	// in simulation anymore.
+	MoveList moves(bool prune = false, bool byWin = false) const;
+
+	const SimmedMove &simmedMoveForMove(const Move &move) const;
+
+	int numLevels() const;
+	int numPlayersAtLevel(int levelIndex) const;
+
+protected:
+	void writeLogHeader();
+	void writeLogFooter();
+
+	void ensureThreads();
+	void reconcileThreads();
+	void shutdownThreads();
+
+	UVString playaheadIndent() const;
+
+	int includedMoveCount() const;
+
+	// returns the number of messages pushed
+	int pushIteration(const SimmedMoveConstants &constants, const UVString &indent, int iteration);
+
+	// Drains the whole chunk, then merges it iteration by iteration, each
+	// wrapped in <iteration>. Reports how many iterations were incorporated;
+	// the one that lost a playahead, and any after it, are dropped.
+	std::exception_ptr collectChunk(int firstIteration, int iterationCount, int messagesPerIteration, int *incorporated);
+
+	UVOFStream m_logfileStream;
+	string m_logfile;
+	bool m_logfileIsOpen;
+	bool m_hasHeader;
+	UVString m_xmlIndent;
+
+	Rack m_partialOppoRack;
+
+	Game m_originalGame;
+	ComputerDispatch *m_dispatch;
+
+	SimmedMoveList m_simmedMoves;
+
+	// moves that are immune from pruning
+	MoveList m_consideredMoves;
+
+	int m_iterations;
+	bool m_ignoreOppos;
+
+	std::vector<std::thread> m_threadPool;
+	// requested; m_threadPool stays empty until the first simulate()
+	size_t m_threadCount;
+	ThreadQoS m_threadQoS;
+	SimmedMoveMessageQueue m_sendQueue;
+	SimmedMoveMessageQueue m_receiveQueue;
+};
+
+inline GamePosition &Simulator::currentPosition()
+{
+	return m_originalGame.currentPosition();
+}
+
+inline const GamePosition &Simulator::currentPosition() const
+{
+	return m_originalGame.currentPosition();
+}
+
+inline const History &Simulator::history() const
+{
+	return m_originalGame.history();
+}
+
+inline ComputerDispatch *Simulator::dispatch() const
+{
+	return m_dispatch;
+}
+
+inline string Simulator::logfile() const
+{
+	return m_logfile;
+}
+
+inline bool Simulator::isLogging() const
+{
+	return m_logfileIsOpen;
+}
+
+inline const Rack &Simulator::partialOppoRack() const
+{
+	return m_partialOppoRack;
+}
+
+inline void Simulator::setConsideredMoves(const MoveList &moves)
+{
+	m_consideredMoves = moves;
+}
+
+inline const MoveList &Simulator::consideredMoves() const
+{
+	return m_consideredMoves;
+}
+
+inline void Simulator::setIgnoreOppos(bool ignore)
+{
+	m_ignoreOppos = ignore;
+}
+
+inline bool Simulator::ignoreOppos() const
+{
+	return m_ignoreOppos;
+}
+
+inline size_t Simulator::threadCount() const
+{
+	return m_threadCount;
+}
+
+inline ThreadQoS Simulator::threadQoS() const
+{
+	return m_threadQoS;
+}
+
+inline int Simulator::iterations() const
+{
+	return m_iterations;
+}
+
+inline bool Simulator::hasSimulationResults() const
+{
+	return m_iterations > 0;
+}
+
+inline const SimmedMoveList &Simulator::simmedMoves() const
+{
+	return m_simmedMoves;
+}
+
+}
+
+UVOStream &operator<<(UVOStream &o, const Quackle::AveragedValue &value);
+UVOStream &operator<<(UVOStream &o, const Quackle::Level &level);
+UVOStream &operator<<(UVOStream &o, const Quackle::SimmedMove &move);
+UVOStream &operator<<(UVOStream &o, const Quackle::SimmedMoveList &move);
+
+#endif

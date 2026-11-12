@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Quackle build output
+engine/obj/
+*.o
+
+# Local settings
+settings.json
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# dev-only Collins word lists (never publish)
+data/csw24.dawg
+data/CSW24.txt
+data/sowpods.dawg
+data/SOWPODS.txt
+
+# local/scratch
+_upload/
+msitest/
+scratch/
+NOTES.md
+.freebuff/
+project-id
