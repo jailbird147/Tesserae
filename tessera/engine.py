@@ -1,4 +1,4 @@
-"""Bridge to the local Quackle engine (qengine.exe)."""
+"""Bridge to the local Quackle engine (engine/qengine, or qengine.exe on Windows)."""
 
 from __future__ import annotations
 
@@ -9,6 +9,9 @@ import threading
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Same program, different name per platform: the Windows build adds .exe.
+ENGINE_NAME = "qengine.exe" if os.name == "nt" else "qengine"
 
 
 class Move(dict):
@@ -86,7 +89,7 @@ class QuackleEngine:
         from .lexicon import default_lexicon, lexicon_dawg, strategy_lexicon
 
         self.root = root or ROOT
-        self.exe = os.path.join(self.root, "engine", "qengine.exe")
+        self.exe = os.path.join(self.root, "engine", ENGINE_NAME)
         # Default to whichever list this build actually has (the Store build
         # ships ENABLE, not the Collins lists).
         self.dawg = engine_path(dawg or lexicon_dawg(default_lexicon()))

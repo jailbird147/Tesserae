@@ -333,6 +333,49 @@ dist\Tessera\Tessera.exe --selftest
 rem then read %TEMP%\tessera_selftest.log
 ```
 
+### macOS
+
+PyInstaller is not a cross-compiler, so the Mac build has to run on a Mac.
+There is no Mac here, so `.github/workflows/macos.yml` does it on a
+GitHub-hosted Apple silicon runner: push a `v*` tag or run the workflow by hand
+from the Actions tab, then download `Tessera.dmg` from the run's artifacts.
+
+The same two steps run locally on any Mac with Xcode Command Line Tools
+(`xcode-select --install`):
+
+```sh
+python3 -m pip install pygame==2.6.1 pyinstaller
+python3 tools/build_engine.py            # clang++ -> engine/qengine
+python3 tools/build_exe.py --store --dmg  # -> dist/Tessera.app, dist/Tessera.dmg
+```
+
+`--store` is required in CI because the Collins lists are not committed. The
+script builds `build/Tessera.icns` from `assets/icon.png` and signs the app
+ad-hoc, which is enough to run it on the machine that built it. For anyone
+else's Mac, set `CODESIGN_IDENTITY` to a Developer ID and `APPLE_ID`,
+`APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` to have the script notarize it as well.
+
+### A Mac build without a Mac
+
+No Mac is needed for the engine or for a runnable folder-of-sources build.
+`zig` (installed at `F:\toolchains\zig`) carries its own macOS libSystem
+stubs, so it can cross-compile the Quackle bridge on Windows:
+
+```bat
+F:\Python312\python.exe tools\build_engine.py --target macos
+F:\Python312\python.exe tools\build_macos_bundle.py
+```
+
+That writes a universal `engine/qengine` (arm64 + x86_64, macOS 11 or newer,
+linked against nothing but `/usr/lib/libSystem`) and packs
+`dist/Tessera-MacOS.zip` - sources, data, assets and the engine, plus `run.sh`
+and `Tessera.command`. On the Mac, unzip and double-click: the script creates a
+venv, installs pygame, ad-hoc signs the engine (Apple silicon will not execute
+unsigned code) and starts the game.
+
+This is a source bundle, not a `.app` - the Mac needs Python 3.10 or newer.
+For the self-contained app, the GitHub Actions workflow is still the way.
+
 ## Project layout
 
 ```
@@ -364,6 +407,9 @@ assets/              app icon and brand assets
   icon.png           window icon
 engine/              Quackle bridge and sources
 tools/               build and test scripts
+  build_exe.py       PyInstaller app: Windows folder build, macOS .app/.dmg
+  build_engine.py    compiles the Quackle bridge (MinGW, clang, or zig for macOS)
+  build_macos_bundle.py  dist/Tessera-MacOS.zip for a Mac with Python installed
   build_msix.py      Store package (manifest, logos, makeappx)
   make_dawg.py       compile a word list into a Quackle DAWG
 shots/               screenshots used in this README
@@ -371,16 +417,23 @@ shots/               screenshots used in this README
 
 ## Rebuilding the engine
 
-The bridge needs MinGW-w64 g++ (installed at `F:\toolchains\mingw64`) and the
-libquackle sources, which are already copied into `engine/quackle`:
+The bridge needs a C++17 compiler and the libquackle sources, which are already
+copied into `engine/quackle`. On Windows that is MinGW-w64 g++ (installed at
+`F:\toolchains\mingw64`):
 
 ```bat
 F:\Python312\python.exe tools\build_engine.py
 ```
 
+On macOS it is `clang++` from the Xcode Command Line Tools, run the same way
+(`python3 tools/build_engine.py`). From Windows, `--target macos` cross-compiles
+it with zig instead and writes the universal `engine/qengine`.
+
 That compiles the libquackle translation units (incrementally, into
-`engine/obj`) and links `engine/qengine.exe`, then copies the MinGW runtime DLLs
-next to it. The engine speaks a tiny line protocol; see the header of
+`engine/obj`, or `engine/obj/macos` on a Mac so the two object trees never mix)
+and links `engine/qengine.exe` on Windows or `engine/qengine` on macOS, then
+copies the MinGW runtime DLLs next to the Windows binary. Set `QUACKLE_CXX` to
+point at a different compiler. The engine speaks a tiny line protocol; see the header of
 `engine/quackle/qengine.cpp`.
 
 ## Tests

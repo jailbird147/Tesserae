@@ -25,7 +25,7 @@ def run_selftest() -> int:
 
     ok = False
     try:
-        from .engine import QuackleEngine
+        from .engine import ENGINE_NAME, QuackleEngine
         from .lexicon import data_path, default_lexicon, lexicon_names, load_lexicon
         from .ui.app import App
 
@@ -33,7 +33,7 @@ def run_selftest() -> int:
         say(f"word lists={','.join(lexicon_names())} default={default_lexicon()}")
         lexicon = load_lexicon()
         say(f"lexicon words={len(lexicon)}")
-        say(f"engine exists={os.path.exists(data_path('engine', 'qengine.exe'))}")
+        say(f"engine exists={os.path.exists(data_path('engine', ENGINE_NAME))}")
 
         engine = QuackleEngine()
         engine.ensure_started()

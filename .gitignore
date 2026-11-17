@@ -6,6 +6,8 @@ __pycache__/
 # Quackle build output
 engine/obj/
 *.o
+# cross-compiled macOS engine (rebuild: tools/build_engine.py --target macos)
+engine/qengine
 
 # Local settings
 settings.json
