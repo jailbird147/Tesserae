@@ -100,11 +100,36 @@ def sign(app: str, identity: str | None) -> int:
     return result.returncode
 
 
+DMG_README = """Tessera
+
+1. Drag the Tessera icon into the Applications folder on the right.
+2. Open Applications, then double-click Tessera.
+3. If macOS says it cannot be opened because it is from an unidentified
+   developer: right-click (or hold Control and click) Tessera, choose Open,
+   then click Open again. You only have to do this once, ever.
+
+That is all - the game needs no other software.
+
+The first time it opens it may take ten seconds longer while macOS checks it.
+"""
+
+
 def make_dmg(app: str) -> str:
+    """Disk image with the app, an Applications shortcut and a read-me."""
     dmg = os.path.join(PROJ, "dist", "Tessera.dmg")
     if os.path.exists(dmg):
         os.remove(dmg)
-    subprocess.run(["hdiutil", "create", "-volname", "Tessera", "-srcfolder", app,
+
+    stage = os.path.join(PROJ, "build", "dmg")
+    shutil.rmtree(stage, ignore_errors=True)
+    os.makedirs(stage)
+    # ditto, not shutil: it preserves permission bits and symlinks inside the bundle
+    subprocess.run(["ditto", app, os.path.join(stage, os.path.basename(app))], check=True)
+    with open(os.path.join(stage, "Read Me First.txt"), "w", newline="\n") as fh:
+        fh.write(DMG_README)
+    os.symlink("/Applications", os.path.join(stage, "Applications"))
+
+    subprocess.run(["hdiutil", "create", "-volname", "Tessera", "-srcfolder", stage,
                     "-ov", "-format", "UDZO", dmg], check=True, capture_output=True)
     print("built", dmg)
     return dmg

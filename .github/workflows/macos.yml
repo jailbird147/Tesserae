@@ -40,8 +40,9 @@ jobs:
         run: python tools/build_exe.py --store --dmg
 
       # A .app is a directory: zip it so permissions and symlinks survive.
+      # --store puts the bundle in dist/store/, not dist/.
       - name: Zip the app bundle
-        run: ditto -c -k --sequesterRsrc --keepParent dist/Tessera.app dist/Tessera.app.zip
+        run: ditto -c -k --sequesterRsrc --keepParent dist/store/Tessera.app dist/Tessera.app.zip
 
       - uses: actions/upload-artifact@v4
         with:
