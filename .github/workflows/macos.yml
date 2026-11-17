@@ -39,6 +39,18 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: python tools/build_exe.py --store --dmg
 
+      # Prove the bundle actually launches on macOS: Python, pygame, the data
+      # files and the Quackle engine, all inside the signed .app.
+      - name: Selftest the built app
+        run: |
+          dist/store/Tessera.app/Contents/MacOS/Tessera --selftest
+          echo "--- selftest log ---"
+          cat "${TMPDIR:-/tmp}/tessera_selftest.log"
+
+      # Render the real screens on Apple silicon (offscreen, dummy video driver).
+      - name: Render screens on macOS
+        run: python tools/screenshot.py
+
       # A .app is a directory: zip it so permissions and symlinks survive.
       # --store puts the bundle in dist/store/, not dist/.
       - name: Zip the app bundle
@@ -50,4 +62,5 @@ jobs:
           path: |
             dist/Tessera.dmg
             dist/Tessera.app.zip
+            shots/*.png
           if-no-files-found: error
